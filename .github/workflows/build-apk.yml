@@ -22,11 +22,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Add Android platform
+            - name: Add Android platform
         run: npx cap add android
 
-        - name: Generate app icons
-  run: npx capacitor-assets generate --android
+      - name: Generate app icons
+        run: npx capacitor-assets generate --android
 
       - name: Create Capacitor assets directory
         run: mkdir -p android/app/src/main/assets
