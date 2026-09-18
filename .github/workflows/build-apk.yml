@@ -49,6 +49,7 @@ jobs:
           import com.getcapacitor.BridgeActivity;
 
           public class MainActivity extends BridgeActivity {
+
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
@@ -56,14 +57,28 @@ jobs:
                   getOnBackPressedDispatcher().addCallback(
                       this,
                       new OnBackPressedCallback(true) {
+
                           @Override
                           public void handleOnBackPressed() {
-                              new AlertDialog.Builder(MainActivity.this)
-                                  .setTitle("Exit App")
-                                  .setMessage("Are you sure you want to exit?")
-                                  .setNegativeButton("NO", null)
-                                  .setPositiveButton("YES", (dialog, which) -> finish())
-                                  .show();
+
+                              if (getBridge() != null &&
+                                  getBridge().getWebView() != null &&
+                                  getBridge().getWebView().canGoBack()) {
+
+                                  getBridge().getWebView().goBack();
+
+                              } else {
+
+                                  new AlertDialog.Builder(MainActivity.this)
+                                      .setTitle("Exit App")
+                                      .setMessage("Are you sure you want to exit?")
+                                      .setNegativeButton("NO", null)
+                                      .setPositiveButton(
+                                          "YES",
+                                          (dialog, which) -> finish()
+                                      )
+                                      .show();
+                              }
                           }
                       }
                   );
@@ -91,15 +106,26 @@ jobs:
                   onBackPressedDispatcher.addCallback(
                       this,
                       object : OnBackPressedCallback(true) {
+
                           override fun handleOnBackPressed() {
-                              AlertDialog.Builder(this@MainActivity)
-                                  .setTitle("Exit App")
-                                  .setMessage("Are you sure you want to exit?")
-                                  .setNegativeButton("NO", null)
-                                  .setPositiveButton("YES") { _, _ ->
-                                      finish()
-                                  }
-                                  .show()
+
+                              val webView = bridge?.webView
+
+                              if (webView != null && webView.canGoBack()) {
+
+                                  webView.goBack()
+
+                              } else {
+
+                                  AlertDialog.Builder(this@MainActivity)
+                                      .setTitle("Exit App")
+                                      .setMessage("Are you sure you want to exit?")
+                                      .setNegativeButton("NO", null)
+                                      .setPositiveButton("YES") { _, _ ->
+                                          finish()
+                                      }
+                                      .show()
+                              }
                           }
                       }
                   )
