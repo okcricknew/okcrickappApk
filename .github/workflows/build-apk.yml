@@ -25,6 +25,96 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
+      - name: Add Android exit confirmation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          java_files = list(
+              Path("android/app/src/main/java").rglob("MainActivity.java")
+          )
+
+          kt_files = list(
+              Path("android/app/src/main/java").rglob("MainActivity.kt")
+          )
+
+          if java_files:
+              java_file = java_files[0]
+
+              java_file.write_text("""package in.okcrick.app;
+
+          import android.app.AlertDialog;
+          import android.os.Bundle;
+          import androidx.activity.OnBackPressedCallback;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  getOnBackPressedDispatcher().addCallback(
+                      this,
+                      new OnBackPressedCallback(true) {
+                          @Override
+                          public void handleOnBackPressed() {
+                              new AlertDialog.Builder(MainActivity.this)
+                                  .setTitle("Exit App")
+                                  .setMessage("Are you sure you want to exit?")
+                                  .setNegativeButton("NO", null)
+                                  .setPositiveButton("YES", (dialog, which) -> finish())
+                                  .show();
+                          }
+                      }
+                  );
+              }
+          }
+          """)
+
+              print(f"Updated Java MainActivity: {java_file}")
+
+          elif kt_files:
+              kt_file = kt_files[0]
+
+              kt_file.write_text("""package in.okcrick.app
+
+          import android.app.AlertDialog
+          import android.os.Bundle
+          import androidx.activity.OnBackPressedCallback
+          import com.getcapacitor.BridgeActivity
+
+          class MainActivity : BridgeActivity() {
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  onBackPressedDispatcher.addCallback(
+                      this,
+                      object : OnBackPressedCallback(true) {
+                          override fun handleOnBackPressed() {
+                              AlertDialog.Builder(this@MainActivity)
+                                  .setTitle("Exit App")
+                                  .setMessage("Are you sure you want to exit?")
+                                  .setNegativeButton("NO", null)
+                                  .setPositiveButton("YES") { _, _ ->
+                                      finish()
+                                  }
+                                  .show()
+                          }
+                      }
+                  )
+              }
+          }
+          """)
+
+              print(f"Updated Kotlin MainActivity: {kt_file}")
+
+          else:
+              raise SystemExit(
+                  "ERROR: MainActivity.java or MainActivity.kt was not found"
+              )
+          PY
+
       - name: Generate app icons
         run: npx capacitor-assets generate --android
 
