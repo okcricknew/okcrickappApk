@@ -25,11 +25,25 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Add Android exit confirmation
+      - name: Add Android exit confirmation and Pull-to-Refresh
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
+          # 1. Add swiperefreshlayout dependency to build.gradle
+          build_gradle = Path("android/app/build.gradle")
+          if build_gradle.exists():
+              content = build_gradle.read_text()
+              if "swiperefreshlayout" not in content:
+                  if "dependencies {" in content:
+                      content = content.replace(
+                          "dependencies {",
+                          "dependencies {\n    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'"
+                      )
+                      build_gradle.write_text(content)
+                      print("Added swiperefreshlayout dependency to build.gradle")
+
+          # 2. Update MainActivity (Java or Kotlin)
           java_files = list(
               Path("android/app/src/main/java").rglob("MainActivity.java")
           )
@@ -45,7 +59,10 @@ jobs:
 
           import android.app.AlertDialog;
           import android.os.Bundle;
+          import android.view.ViewGroup;
+          import android.webkit.WebView;
           import androidx.activity.OnBackPressedCallback;
+          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
           import com.getcapacitor.BridgeActivity;
 
           public class MainActivity extends BridgeActivity {
@@ -82,11 +99,39 @@ jobs:
                           }
                       }
                   );
+
+                  WebView webView = getBridge().getWebView();
+                  if (webView != null) {
+                      ViewGroup parent = (ViewGroup) webView.getParent();
+                      if (parent != null) {
+                          parent.removeView(webView);
+
+                          SwipeRefreshLayout swipeRefreshLayout = new SwipeRefreshLayout(this);
+                          swipeRefreshLayout.setLayoutParams(new ViewGroup.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              ViewGroup.LayoutParams.MATCH_PARENT
+                          ));
+
+                          swipeRefreshLayout.addView(webView, new ViewGroup.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              ViewGroup.LayoutParams.MATCH_PARENT
+                          ));
+
+                          swipeRefreshLayout.setOnRefreshListener(() -> {
+                              webView.reload();
+                              new android.os.Handler().postDelayed(() -> {
+                                  swipeRefreshLayout.setRefreshing(false);
+                              }, 1200);
+                          });
+
+                          parent.addView(swipeRefreshLayout);
+                      }
+                  }
               }
           }
           """)
 
-              print(f"Updated Java MainActivity: {java_file}")
+              print(f"Updated Java MainActivity with Pull-to-Refresh: {java_file}")
 
           elif kt_files:
               kt_file = kt_files[0]
@@ -95,7 +140,9 @@ jobs:
 
           import android.app.AlertDialog
           import android.os.Bundle
+          import android.view.ViewGroup
           import androidx.activity.OnBackPressedCallback
+          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
           import com.getcapacitor.BridgeActivity
 
           class MainActivity : BridgeActivity() {
@@ -129,11 +176,36 @@ jobs:
                           }
                       }
                   )
+
+                  val webView = bridge?.webView
+                  if (webView != null) {
+                      val parent = webView.parent as? ViewGroup
+                      parent?.let {
+                          it.removeView(webView)
+                          val swipeRefreshLayout = SwipeRefreshLayout(this).apply {
+                              layoutParams = ViewGroup.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT
+                              )
+                              addView(webView, ViewGroup.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT
+                              ))
+                              setOnRefreshListener {
+                                  webView.reload()
+                                  android.os.Handler(mainLooper).postDelayed({
+                                      isRefreshing = false
+                                  }, 1200)
+                              }
+                          }
+                          it.addView(swipeRefreshLayout)
+                      }
+                  }
               }
           }
           """)
 
-              print(f"Updated Kotlin MainActivity: {kt_file}")
+              print(f"Updated Kotlin MainActivity with Pull-to-Refresh: {kt_file}")
 
           else:
               raise SystemExit(
@@ -170,3 +242,4 @@ jobs:
           name: OK CRICK APK ${{ github.run_number }}
           files: OK-CRICK.apk
           generate_release_notes: false
+          
