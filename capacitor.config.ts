@@ -5,7 +5,7 @@ const config: CapacitorConfig = {
   appName: 'OK CRICK',
   webDir: 'www',
   server: {
-    url: 'https://onlineplay.vercel.app',
+    url: 'https://livescoring.vercel.app',
     cleartext: false
   }
 };
