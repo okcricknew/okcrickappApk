@@ -230,10 +230,10 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleDebug
 
       - name: Rename APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk OK-CRICK.apk
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk OK-CRICK.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -242,4 +242,3 @@ jobs:
           name: OK CRICK APK ${{ github.run_number }}
           files: OK-CRICK.apk
           generate_release_notes: false
-          
