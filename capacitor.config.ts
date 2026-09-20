@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'in.okcrick.app',
-  appName: 'OK CRICK',
+  appName: 'OkCrick',
   webDir: 'www',
   server: {
     url: 'https://livescoring.vercel.app',
