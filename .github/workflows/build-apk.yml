@@ -71,7 +71,7 @@ jobs:
           target_icon.write_bytes(source_icon.read_bytes())
           print(f"Copied startup icon: {source_icon} -> {target_icon}")
 
-          # 4. Update MainActivity (Java or Kotlin) with larger startup icon (180dp)
+          # 4. Update MainActivity (Java or Kotlin) with 5-second persistent startup icon overlay
           java_files = list(
               Path("android/app/src/main/java").rglob("MainActivity.java")
           )
@@ -88,10 +88,11 @@ jobs:
           import android.app.AlertDialog;
           import android.graphics.Color;
           import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
           import android.view.Gravity;
           import android.view.View;
           import android.view.ViewGroup;
-          import android.view.ViewTreeObserver;
           import android.webkit.WebView;
           import android.widget.FrameLayout;
           import android.widget.ImageView;
@@ -108,6 +109,14 @@ jobs:
                   super.onCreate(savedInstanceState);
 
                   showStartupIcon();
+
+                  // Keep the startup overlay visible for a guaranteed 5 seconds without flickering
+                  new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                      @Override
+                      public void run() {
+                          hideStartupIcon();
+                      }
+                  }, 5000);
 
                   getOnBackPressedDispatcher().addCallback(
                       this,
@@ -140,19 +149,6 @@ jobs:
 
                   WebView webView = getBridge().getWebView();
                   if (webView != null) {
-                      webView.getViewTreeObserver().addOnPreDrawListener(
-                          new ViewTreeObserver.OnPreDrawListener() {
-                              @Override
-                              public boolean onPreDraw() {
-                                  if (webView.getWidth() > 0 && webView.getHeight() > 0) {
-                                      webView.getViewTreeObserver().removeOnPreDrawListener(this);
-                                      hideStartupIcon();
-                                  }
-                                  return true;
-                              }
-                          }
-                      );
-
                       ViewGroup parent = (ViewGroup) webView.getParent();
                       if (parent != null) {
                           parent.removeView(webView);
@@ -170,7 +166,7 @@ jobs:
 
                           swipeRefreshLayout.setOnRefreshListener(() -> {
                               webView.reload();
-                              new android.os.Handler().postDelayed(() -> {
+                              new Handler(Looper.getMainLooper()).postDelayed(() -> {
                                   swipeRefreshLayout.setRefreshing(false);
                               }, 1200);
                           });
@@ -197,7 +193,6 @@ jobs:
                   ));
                   icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
 
-                  // Increased size to 180dp for a larger prominent icon
                   int size = (int) (180 * getResources().getDisplayMetrics().density);
                   FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(size, size);
                   iconParams.gravity = Gravity.CENTER;
@@ -213,7 +208,7 @@ jobs:
                   startupOverlay = null;
                   overlay.animate()
                       .alpha(0f)
-                      .setDuration(160)
+                      .setDuration(300)
                       .withEndAction(() -> {
                           ViewGroup parent = (ViewGroup) overlay.getParent();
                           if (parent != null) parent.removeView(overlay);
@@ -223,7 +218,7 @@ jobs:
           }
           """)
 
-              print(f"Updated Java MainActivity with larger icon: {java_file}")
+              print(f"Updated Java MainActivity with 5s delay: {java_file}")
 
           elif kt_files:
               kt_file = kt_files[0]
@@ -233,10 +228,11 @@ jobs:
           import android.app.AlertDialog
           import android.graphics.Color
           import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
           import android.view.Gravity
           import android.view.View
           import android.view.ViewGroup
-          import android.view.ViewTreeObserver
           import android.widget.FrameLayout
           import android.widget.ImageView
           import androidx.activity.OnBackPressedCallback
@@ -251,6 +247,11 @@ jobs:
                   super.onCreate(savedInstanceState)
 
                   showStartupIcon()
+
+                  // Keep the startup overlay visible for a guaranteed 5 seconds without flickering
+                  Handler(Looper.getMainLooper()).postDelayed({
+                      hideStartupIcon()
+                  }, 5000)
 
                   onBackPressedDispatcher.addCallback(
                       this,
@@ -276,18 +277,6 @@ jobs:
 
                   val webView = bridge?.webView
                   if (webView != null) {
-                      webView.viewTreeObserver.addOnPreDrawListener(
-                          object : ViewTreeObserver.OnPreDrawListener {
-                              override fun onPreDraw(): Boolean {
-                                  if (webView.width > 0 && webView.height > 0) {
-                                      webView.viewTreeObserver.removeOnPreDrawListener(this)
-                                      hideStartupIcon()
-                                  }
-                                  return true
-                              }
-                          }
-                      )
-
                       val parent = webView.parent as? ViewGroup
                       parent?.let {
                           it.removeView(webView)
@@ -302,7 +291,7 @@ jobs:
                               ))
                               setOnRefreshListener {
                                   webView.reload()
-                                  android.os.Handler(mainLooper).postDelayed({
+                                  Handler(Looper.getMainLooper()).postDelayed({
                                       isRefreshing = false
                                   }, 1200)
                               }
@@ -328,7 +317,6 @@ jobs:
                   ))
                   icon.scaleType = ImageView.ScaleType.FIT_CENTER
 
-                  // Increased size to 180dp for a larger prominent icon
                   val size = (180 * resources.displayMetrics.density).toInt()
                   val iconParams = FrameLayout.LayoutParams(size, size)
                   iconParams.gravity = Gravity.CENTER
@@ -343,7 +331,7 @@ jobs:
                   startupOverlay = null
                   overlay.animate()
                       .alpha(0f)
-                      .setDuration(160)
+                      .setDuration(300)
                       .withEndAction {
                           (overlay.parent as? ViewGroup)?.removeView(overlay)
                       }
@@ -352,7 +340,7 @@ jobs:
           }
           """)
 
-              print(f"Updated Kotlin MainActivity with larger icon: {kt_file}")
+              print(f"Updated Kotlin MainActivity with 5s delay: {kt_file}")
 
           else:
               raise SystemExit(
