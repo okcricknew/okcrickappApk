@@ -25,7 +25,7 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Configure Android Manifest, Startup Icon, and UI Features
+      - name: Configure Android Manifest, Theme Background, Startup Icon, and UI Features
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -61,7 +61,7 @@ jobs:
               manifest_path.write_text(manifest_content)
               print("Updated AndroidManifest.xml with launcher and notification icons")
 
-          # 3. Copy the repository icon to a guaranteed drawable resource for startup overlay.
+          # 3. Copy the repository icon to a guaranteed drawable resource for startup overlay & instant background.
           drawable_dir = Path("android/app/src/main/res/drawable")
           drawable_dir.mkdir(parents=True, exist_ok=True)
           source_icon = Path("resources/icon.png")
@@ -71,7 +71,31 @@ jobs:
           target_icon.write_bytes(source_icon.read_bytes())
           print(f"Copied startup icon: {source_icon} -> {target_icon}")
 
-          # 4. Update MainActivity (Java or Kotlin) with 5-second persistent startup icon overlay
+          # 4. Update styles.xml / themes.xml to set windowBackground to startup_icon (Eliminates white screen flash entirely)
+          values_dir = Path("android/app/src/main/res/values")
+          for theme_file in ["styles.xml", "themes.xml"]:
+              theme_path = values_dir / theme_file
+              if theme_path.exists():
+                  t_content = theme_path.read_text()
+                  if "android:windowBackground" not in t_content:
+                      if "<style " in t_content:
+                          # Inject windowBackground item into the first style definition
+                          t_content = t_content.replace(
+                              "<style ",
+                              "<style "
+                          )
+                          # Find style closing or tag opening to insert item
+                          parts = t_content.split(">", 1)
+                          if len(parts) == 2 and "</style>" in t_content:
+                              # insert before closing style or right after opening
+                              t_content = t_content.replace(
+                                  "</style>",
+                                  '    <item name="android:windowBackground">@drawable/startup_icon</item>\n    </style>'
+                              )
+                              theme_path.write_text(t_content)
+                              print(f"Updated {theme_file} with windowBackground to prevent white flash")
+
+          # 5. Update MainActivity (Java or Kotlin) with 5-second persistent startup icon overlay
           java_files = list(
               Path("android/app/src/main/java").rglob("MainActivity.java")
           )
@@ -301,7 +325,7 @@ jobs:
                   }
               }
 
-              private fun showStartupIcon() {
+              private void showStartupIcon() {
                   val root = findViewById<ViewGroup>(android.R.id.content) ?: return
 
                   val overlay = FrameLayout(this)
@@ -326,7 +350,7 @@ jobs:
                   startupOverlay = overlay
               }
 
-              private fun hideStartupIcon() {
+              private void hideStartupIcon() {
                   val overlay = startupOverlay ?: return
                   startupOverlay = null
                   overlay.animate()
