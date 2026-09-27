@@ -25,322 +25,148 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Add Android exit confirmation and Pull-to-Refresh
+      - name: Configure Android splash
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          # 1. Add swiperefreshlayout dependency to build.gradle
-          build_gradle = Path("android/app/build.gradle")
-          if build_gradle.exists():
-              content = build_gradle.read_text()
-              if "swiperefreshlayout" not in content:
-                  if "dependencies {" in content:
-                      content = content.replace(
-                          "dependencies {",
-                          "dependencies {\n    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'"
-                      )
-                      build_gradle.write_text(content)
-                      print("Added swiperefreshlayout dependency to build.gradle")
+          # Pull-to-Refresh dependency — existing logic preserved
+          gradle = Path("android/app/build.gradle")
+          if gradle.exists():
+              s = gradle.read_text()
+              if "swiperefreshlayout" not in s:
+                  s = s.replace(
+                      "dependencies {",
+                      "dependencies {\n    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'",
+                      1
+                  )
+                  gradle.write_text(s)
 
-          # 2. Copy the repository icon to a guaranteed drawable resource.
-          drawable_dir = Path("android/app/src/main/res/drawable")
-          drawable_dir.mkdir(parents=True, exist_ok=True)
-          source_icon = Path("resources/icon.png")
-          target_icon = drawable_dir / "startup_icon.png"
-          if not source_icon.exists():
-              raise SystemExit("ERROR: resources/icon.png was not found")
-          target_icon.write_bytes(source_icon.read_bytes())
-          print(f"Copied startup icon: {source_icon} -> {target_icon}")
+          # Existing repository icon
+          icon = Path("resources/icon.png")
+          if not icon.exists():
+              raise SystemExit("ERROR: resources/icon.png not found")
 
-          # 3. Update MainActivity (Java or Kotlin)
-          java_files = list(
+          drawable = Path("android/app/src/main/res/drawable-nodpi")
+          drawable.mkdir(parents=True, exist_ok=True)
+          (drawable / "startup_icon.png").write_bytes(icon.read_bytes())
+
+          # Native startup background — prevents initial white flash
+          bg = Path(
+              "android/app/src/main/res/drawable/startup_background.xml"
+          )
+          bg.write_text("""<?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:drawable="@android:color/white"/>
+              <item
+                  android:width="240dp"
+                  android:height="240dp"
+                  android:gravity="center">
+                  <bitmap
+                      android:src="@drawable/startup_icon"
+                      android:gravity="fill"/>
+              </item>
+          </layer-list>
+          """)
+
+          # Android theme background
+          values = Path("android/app/src/main/res/values")
+          values.mkdir(parents=True, exist_ok=True)
+
+          for f in values.glob("*.xml"):
+              s = f.read_text()
+              if "AppTheme" in s and "startup_background" not in s:
+                  s = s.replace(
+                      "</style>",
+                      '    <item name="android:windowBackground">@drawable/startup_background</item>\n</style>',
+                      1
+                  )
+                  f.write_text(s)
+
+          # MainActivity
+          java = list(
               Path("android/app/src/main/java").rglob("MainActivity.java")
           )
 
-          kt_files = list(
-              Path("android/app/src/main/java").rglob("MainActivity.kt")
+          if not java:
+              raise SystemExit("ERROR: MainActivity.java not found")
+
+          f = java[0]
+          s = f.read_text()
+
+          # Handler import
+          if "import android.os.Handler;" not in s:
+              s = s.replace(
+                  "import android.os.Bundle;",
+                  "import android.os.Bundle;\n          import android.os.Handler;"
+              )
+
+          # 5-second splash constant + timer
+          if "STARTUP_SPLASH_DURATION" not in s:
+              s = s.replace(
+                  "private View startupOverlay;",
+                  """private View startupOverlay;
+
+              private static final long STARTUP_SPLASH_DURATION = 5000L;
+
+              private final Handler startupHandler = new Handler();
+
+              private final Runnable hideStartupRunnable = () -> hideStartupIcon();"""
+              )
+
+          # IMPORTANT:
+          # Remove old "hide on first WebView draw" block.
+          start = s.find(
+              "webView.getViewTreeObserver().addOnPreDrawListener("
           )
 
-          if java_files:
-              java_file = java_files[0]
-
-              java_file.write_text("""package in.okcrick.app;
-
-          import android.app.AlertDialog;
-          import android.graphics.Color;
-          import android.os.Bundle;
-          import android.view.Gravity;
-          import android.view.View;
-          import android.view.ViewGroup;
-          import android.view.ViewTreeObserver;
-          import android.webkit.WebView;
-          import android.widget.FrameLayout;
-          import android.widget.ImageView;
-          import androidx.activity.OnBackPressedCallback;
-          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-          import com.getcapacitor.BridgeActivity;
-
-          public class MainActivity extends BridgeActivity {
-
-              private View startupOverlay;
-
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-
-                  // ONLY startup overlay is added here. Existing app logic below is unchanged.
-                  showStartupIcon();
-
-                  getOnBackPressedDispatcher().addCallback(
-                      this,
-                      new OnBackPressedCallback(true) {
-
-                          @Override
-                          public void handleOnBackPressed() {
-
-                              if (getBridge() != null &&
-                                  getBridge().getWebView() != null &&
-                                  getBridge().getWebView().canGoBack()) {
-
-                                  getBridge().getWebView().goBack();
-
-                              } else {
-
-                                  new AlertDialog.Builder(MainActivity.this)
-                                      .setTitle("Exit App")
-                                      .setMessage("Are you sure you want to exit?")
-                                      .setNegativeButton("NO", null)
-                                      .setPositiveButton(
-                                          "YES",
-                                          (dialog, which) -> finish()
-                                      )
-                                      .show();
-                              }
-                          }
-                      }
-                  );
-
-                  WebView webView = getBridge().getWebView();
-                  if (webView != null) {
-                      // Hide overlay on the first actual WebView draw. No WebViewClient is replaced.
-                      webView.getViewTreeObserver().addOnPreDrawListener(
-                          new ViewTreeObserver.OnPreDrawListener() {
-                              @Override
-                              public boolean onPreDraw() {
-                                  if (webView.getWidth() > 0 && webView.getHeight() > 0) {
-                                      webView.getViewTreeObserver().removeOnPreDrawListener(this);
-                                      hideStartupIcon();
-                                  }
-                                  return true;
-                              }
-                          }
-                      );
-
-                      ViewGroup parent = (ViewGroup) webView.getParent();
-                      if (parent != null) {
-                          parent.removeView(webView);
-
-                          SwipeRefreshLayout swipeRefreshLayout = new SwipeRefreshLayout(this);
-                          swipeRefreshLayout.setLayoutParams(new ViewGroup.LayoutParams(
-                              ViewGroup.LayoutParams.MATCH_PARENT,
-                              ViewGroup.LayoutParams.MATCH_PARENT
-                          ));
-
-                          swipeRefreshLayout.addView(webView, new ViewGroup.LayoutParams(
-                              ViewGroup.LayoutParams.MATCH_PARENT,
-                              ViewGroup.LayoutParams.MATCH_PARENT
-                          ));
-
-                          swipeRefreshLayout.setOnRefreshListener(() -> {
-                              webView.reload();
-                              new android.os.Handler().postDelayed(() -> {
-                                  swipeRefreshLayout.setRefreshing(false);
-                              }, 1200);
-                          });
-
-                          parent.addView(swipeRefreshLayout);
-                      }
-                  }
-              }
-
-              private void showStartupIcon() {
-                  ViewGroup root = findViewById(android.R.id.content);
-                  if (root == null) return;
-
-                  FrameLayout overlay = new FrameLayout(this);
-                  overlay.setBackgroundColor(Color.WHITE);
-                  overlay.setLayoutParams(new FrameLayout.LayoutParams(
-                      ViewGroup.LayoutParams.MATCH_PARENT,
-                      ViewGroup.LayoutParams.MATCH_PARENT
-                  ));
-
-                  ImageView icon = new ImageView(this);
-                  icon.setImageResource(getResources().getIdentifier(
-                      "startup_icon", "drawable", getPackageName()
-                  ));
-                  icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-
-                  int size = (int) (120 * getResources().getDisplayMetrics().density);
-                  FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(size, size);
-                  iconParams.gravity = Gravity.CENTER;
-                  overlay.addView(icon, iconParams);
-
-                  root.addView(overlay);
-                  startupOverlay = overlay;
-              }
-
-              private void hideStartupIcon() {
-                  View overlay = startupOverlay;
-                  if (overlay == null) return;
-                  startupOverlay = null;
-                  overlay.animate()
-                      .alpha(0f)
-                      .setDuration(160)
-                      .withEndAction(() -> {
-                          ViewGroup parent = (ViewGroup) overlay.getParent();
-                          if (parent != null) parent.removeView(overlay);
-                      })
-                      .start();
-              }
-          }
-          """)
-
-              print(f"Updated Java MainActivity with Pull-to-Refresh: {java_file}")
-
-          elif kt_files:
-              kt_file = kt_files[0]
-
-              kt_file.write_text("""package in.okcrick.app
-
-          import android.app.AlertDialog
-          import android.graphics.Color
-          import android.os.Bundle
-          import android.view.Gravity
-          import android.view.View
-          import android.view.ViewGroup
-          import android.view.ViewTreeObserver
-          import android.widget.FrameLayout
-          import android.widget.ImageView
-          import androidx.activity.OnBackPressedCallback
-          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-          import com.getcapacitor.BridgeActivity
-
-          class MainActivity : BridgeActivity() {
-
-              private var startupOverlay: View? = null
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-
-                  // ONLY startup overlay is added here. Existing app logic below is unchanged.
-                  showStartupIcon()
-
-                  onBackPressedDispatcher.addCallback(
-                      this,
-                      object : OnBackPressedCallback(true) {
-
-                          override fun handleOnBackPressed() {
-
-                              val webView = bridge?.webView
-
-                              if (webView != null && webView.canGoBack()) {
-                                  webView.goBack()
-                              } else {
-                                  AlertDialog.Builder(this@MainActivity)
-                                      .setTitle("Exit App")
-                                      .setMessage("Are you sure you want to exit?")
-                                      .setNegativeButton("NO", null)
-                                      .setPositiveButton("YES") { _, _ -> finish() }
-                                      .show()
-                              }
-                          }
-                      }
-                  )
-
-                  val webView = bridge?.webView
-                  if (webView != null) {
-                      webView.viewTreeObserver.addOnPreDrawListener(
-                          object : ViewTreeObserver.OnPreDrawListener {
-                              override fun onPreDraw(): Boolean {
-                                  if (webView.width > 0 && webView.height > 0) {
-                                      webView.viewTreeObserver.removeOnPreDrawListener(this)
-                                      hideStartupIcon()
-                                  }
-                                  return true
-                              }
-                          }
-                      )
-
-                      val parent = webView.parent as? ViewGroup
-                      parent?.let {
-                          it.removeView(webView)
-                          val swipeRefreshLayout = SwipeRefreshLayout(this).apply {
-                              layoutParams = ViewGroup.LayoutParams(
-                                  ViewGroup.LayoutParams.MATCH_PARENT,
-                                  ViewGroup.LayoutParams.MATCH_PARENT
-                              )
-                              addView(webView, ViewGroup.LayoutParams(
-                                  ViewGroup.LayoutParams.MATCH_PARENT,
-                                  ViewGroup.LayoutParams.MATCH_PARENT
-                              ))
-                              setOnRefreshListener {
-                                  webView.reload()
-                                  android.os.Handler(mainLooper).postDelayed({
-                                      isRefreshing = false
-                                  }, 1200)
-                              }
-                          }
-                          it.addView(swipeRefreshLayout)
-                      }
-                  }
-              }
-
-              private fun showStartupIcon() {
-                  val root = findViewById<ViewGroup>(android.R.id.content) ?: return
-
-                  val overlay = FrameLayout(this)
-                  overlay.setBackgroundColor(Color.WHITE)
-                  overlay.layoutParams = FrameLayout.LayoutParams(
-                      ViewGroup.LayoutParams.MATCH_PARENT,
-                      ViewGroup.LayoutParams.MATCH_PARENT
-                  )
-
-                  val icon = ImageView(this)
-                  icon.setImageResource(resources.getIdentifier(
-                      "startup_icon", "drawable", packageName
-                  ))
-                  icon.scaleType = ImageView.ScaleType.FIT_CENTER
-
-                  val size = (120 * resources.displayMetrics.density).toInt()
-                  val iconParams = FrameLayout.LayoutParams(size, size)
-                  iconParams.gravity = Gravity.CENTER
-                  overlay.addView(icon, iconParams)
-
-                  root.addView(overlay)
-                  startupOverlay = overlay
-              }
-
-              private fun hideStartupIcon() {
-                  val overlay = startupOverlay ?: return
-                  startupOverlay = null
-                  overlay.animate()
-                      .alpha(0f)
-                      .setDuration(160)
-                      .withEndAction {
-                          (overlay.parent as? ViewGroup)?.removeView(overlay)
-                      }
-                      .start()
-              }
-          }
-          """)
-
-              print(f"Updated Kotlin MainActivity with Pull-to-Refresh: {kt_file}")
-
-          else:
-              raise SystemExit(
-                  "ERROR: MainActivity.java or MainActivity.kt was not found"
+          if start != -1:
+              end = s.find(
+                  "                      );",
+                  start
               )
+
+              if end != -1:
+                  end += len("                      );")
+                  s = s[:start] + s[end:]
+
+          # Start 5-second timer immediately after splash is shown
+          if "startupHandler.postDelayed" not in s:
+              s = s.replace(
+                  "showStartupIcon();",
+                  """showStartupIcon();
+
+                  // Keep splash visible for a full 5 seconds.
+                  startupHandler.postDelayed(
+                      hideStartupRunnable,
+                      STARTUP_SPLASH_DURATION
+                  );""",
+                  1
+              )
+
+          # 120dp -> 240dp
+          s = s.replace(
+              "(int) (120 * getResources().getDisplayMetrics().density)",
+              "(int) (240 * getResources().getDisplayMetrics().density)"
+          )
+
+          # Cancel timer when Activity is destroyed
+          if "startupHandler.removeCallbacks" not in s:
+              marker = "\n          }\n      }"
+              pos = s.rfind(marker)
+
+              if pos != -1:
+                  s = s[:pos] + """
+              @Override
+              protected void onDestroy() {
+                  startupHandler.removeCallbacks(hideStartupRunnable);
+                  super.onDestroy();
+              }
+          }""" + s[pos + len(marker):]
+
+          f.write_text(s)
+
+          print("5-second large startup splash configured.")
           PY
 
       - name: Generate app icons
@@ -372,4 +198,3 @@ jobs:
           name: OK CRICK APK ${{ github.run_number }}
           files: OK-CRICK.apk
           generate_release_notes: false
-          
