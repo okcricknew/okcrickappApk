@@ -25,10 +25,14 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Configure Android Manifest, Theme Background, Startup Icon, and UI Features
+      - name: Install Python Pillow for Icon Generation
+        run: pip install Pillow
+
+      - name: Configure Android Manifest, Theme Background, Mipmap Icons, and UI Features
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          from PIL import Image
 
           # 1. Add swiperefreshlayout dependency to build.gradle
           build_gradle = Path("android/app/build.gradle")
@@ -61,33 +65,46 @@ jobs:
               manifest_path.write_text(manifest_content)
               print("Updated AndroidManifest.xml with launcher and notification icons")
 
-          # 3. Copy the repository icon to a guaranteed drawable resource for startup overlay & instant background.
-          drawable_dir = Path("android/app/src/main/res/drawable")
-          drawable_dir.mkdir(parents=True, exist_ok=True)
+          # 3. Generate standard PNG icons for all Mipmap densities to fix installer/notification generic icon issue
           source_icon = Path("resources/icon.png")
-          target_icon = drawable_dir / "startup_icon.png"
           if not source_icon.exists():
               raise SystemExit("ERROR: resources/icon.png was not found")
+
+          img = Image.open(source_icon).convert("RGBA")
+          mipmaps = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192
+          }
+
+          res_dir = Path("android/app/src/main/res")
+          for folder, size in mipmaps.items():
+              target_folder = res_dir / folder
+              target_folder.mkdir(parents=True, exist_ok=True)
+              resized = img.resize((size, size), Image.Resampling.LANCZOS)
+              resized.save(target_folder / "ic_launcher.png", "PNG")
+              resized.save(target_folder / "ic_launcher_round.png", "PNG")
+          print("Successfully generated legacy PNG launcher icons across all mipmap densities!")
+
+          # 4. Copy the repository icon to a guaranteed drawable resource for startup overlay & instant background.
+          drawable_dir = res_dir / "drawable"
+          drawable_dir.mkdir(parents=True, exist_ok=True)
+          target_icon = drawable_dir / "startup_icon.png"
           target_icon.write_bytes(source_icon.read_bytes())
           print(f"Copied startup icon: {source_icon} -> {target_icon}")
 
-          # 4. Update styles.xml / themes.xml to set windowBackground to startup_icon (Eliminates white screen flash entirely)
-          values_dir = Path("android/app/src/main/res/values")
+          # 5. Update styles.xml / themes.xml to set windowBackground to startup_icon (Eliminates white screen flash entirely)
+          values_dir = res_dir / "values"
           for theme_file in ["styles.xml", "themes.xml"]:
               theme_path = values_dir / theme_file
               if theme_path.exists():
                   t_content = theme_path.read_text()
                   if "android:windowBackground" not in t_content:
                       if "<style " in t_content:
-                          # Inject windowBackground item into the first style definition
-                          t_content = t_content.replace(
-                              "<style ",
-                              "<style "
-                          )
-                          # Find style closing or tag opening to insert item
                           parts = t_content.split(">", 1)
                           if len(parts) == 2 and "</style>" in t_content:
-                              # insert before closing style or right after opening
                               t_content = t_content.replace(
                                   "</style>",
                                   '    <item name="android:windowBackground">@drawable/startup_icon</item>\n    </style>'
@@ -95,7 +112,7 @@ jobs:
                               theme_path.write_text(t_content)
                               print(f"Updated {theme_file} with windowBackground to prevent white flash")
 
-          # 5. Update MainActivity (Java or Kotlin) with 5-second persistent startup icon overlay
+          # 6. Update MainActivity (Java or Kotlin) keeping your exact 5s delay, size 240, and UI logic
           java_files = list(
               Path("android/app/src/main/java").rglob("MainActivity.java")
           )
@@ -106,7 +123,6 @@ jobs:
 
           if java_files:
               java_file = java_files[0]
-
               java_file.write_text("""package in.okcrick.app;
 
           import android.app.AlertDialog;
@@ -134,7 +150,6 @@ jobs:
 
                   showStartupIcon();
 
-                  // Keep the startup overlay visible for a guaranteed 5 seconds without flickering
                   new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                       @Override
                       public void run() {
@@ -145,26 +160,18 @@ jobs:
                   getOnBackPressedDispatcher().addCallback(
                       this,
                       new OnBackPressedCallback(true) {
-
                           @Override
                           public void handleOnBackPressed() {
-
                               if (getBridge() != null &&
                                   getBridge().getWebView() != null &&
                                   getBridge().getWebView().canGoBack()) {
-
                                   getBridge().getWebView().goBack();
-
                               } else {
-
                                   new AlertDialog.Builder(MainActivity.this)
                                       .setTitle("Exit App")
                                       .setMessage("Are you sure you want to exit?")
                                       .setNegativeButton("NO", null)
-                                      .setPositiveButton(
-                                          "YES",
-                                          (dialog, which) -> finish()
-                                      )
+                                      .setPositiveButton("YES", (dialog, which) -> finish())
                                       .show();
                               }
                           }
@@ -241,12 +248,10 @@ jobs:
               }
           }
           """)
-
-              print(f"Updated Java MainActivity with 5s delay: {java_file}")
+              print(f"Updated Java MainActivity: {java_file}")
 
           elif kt_files:
               kt_file = kt_files[0]
-
               kt_file.write_text("""package in.okcrick.app
 
           import android.app.AlertDialog
@@ -272,7 +277,6 @@ jobs:
 
                   showStartupIcon()
 
-                  // Keep the startup overlay visible for a guaranteed 5 seconds without flickering
                   Handler(Looper.getMainLooper()).postDelayed({
                       hideStartupIcon()
                   }, 5000)
@@ -280,11 +284,8 @@ jobs:
                   onBackPressedDispatcher.addCallback(
                       this,
                       object : OnBackPressedCallback(true) {
-
                           override fun handleOnBackPressed() {
-
                               val webView = bridge?.webView
-
                               if (webView != null && webView.canGoBack()) {
                                   webView.goBack()
                               } else {
@@ -341,7 +342,7 @@ jobs:
                   ))
                   icon.scaleType = ImageView.ScaleType.FIT_CENTER
 
-                  val size = (240 * resources.displayMetrics.density).toInt()
+                  val size = (180 * resources.displayMetrics.density).toInt()
                   val iconParams = FrameLayout.LayoutParams(size, size)
                   iconParams.gravity = Gravity.CENTER
                   overlay.addView(icon, iconParams)
@@ -363,17 +364,11 @@ jobs:
               }
           }
           """)
-
-              print(f"Updated Kotlin MainActivity with 5s delay: {kt_file}")
+              print(f"Updated Kotlin MainActivity: {kt_file}")
 
           else:
-              raise SystemExit(
-                  "ERROR: MainActivity.java or MainActivity.kt was not found"
-              )
+              raise SystemExit("ERROR: MainActivity.java or MainActivity.kt was not found")
           PY
-
-      - name: Generate app icons
-        run: npx capacitor-assets generate --android
 
       - name: Create Capacitor assets directory
         run: mkdir -p android/app/src/main/assets
