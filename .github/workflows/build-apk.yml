@@ -28,11 +28,10 @@ jobs:
       - name: Install Python Pillow for Icon Generation
         run: pip install Pillow
 
-      - name: Configure Android Manifest, Theme Background, Mipmap Icons, and UI Features
+      - name: Configure Android Manifest, Theme Background, and UI Features
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          from PIL import Image
 
           # 1. Add swiperefreshlayout dependency to build.gradle
           build_gradle = Path("android/app/build.gradle")
@@ -65,38 +64,18 @@ jobs:
               manifest_path.write_text(manifest_content)
               print("Updated AndroidManifest.xml with launcher and notification icons")
 
-          # 3. Generate standard PNG icons for all Mipmap densities to fix installer/notification generic icon issue
+          # 3. Copy the repository icon to a guaranteed drawable resource for startup overlay & instant background.
+          drawable_dir = Path("android/app/src/main/res/drawable")
+          drawable_dir.mkdir(parents=True, exist_ok=True)
           source_icon = Path("resources/icon.png")
+          target_icon = drawable_dir / "startup_icon.png"
           if not source_icon.exists():
               raise SystemExit("ERROR: resources/icon.png was not found")
-
-          img = Image.open(source_icon).convert("RGBA")
-          mipmaps = {
-              "mipmap-mdpi": 48,
-              "mipmap-hdpi": 72,
-              "mipmap-xhdpi": 96,
-              "mipmap-xxhdpi": 144,
-              "mipmap-xxxhdpi": 192
-          }
-
-          res_dir = Path("android/app/src/main/res")
-          for folder, size in mipmaps.items():
-              target_folder = res_dir / folder
-              target_folder.mkdir(parents=True, exist_ok=True)
-              resized = img.resize((size, size), Image.Resampling.LANCZOS)
-              resized.save(target_folder / "ic_launcher.png", "PNG")
-              resized.save(target_folder / "ic_launcher_round.png", "PNG")
-          print("Successfully generated legacy PNG launcher icons across all mipmap densities!")
-
-          # 4. Copy the repository icon to a guaranteed drawable resource for startup overlay & instant background.
-          drawable_dir = res_dir / "drawable"
-          drawable_dir.mkdir(parents=True, exist_ok=True)
-          target_icon = drawable_dir / "startup_icon.png"
           target_icon.write_bytes(source_icon.read_bytes())
           print(f"Copied startup icon: {source_icon} -> {target_icon}")
 
-          # 5. Update styles.xml / themes.xml to set windowBackground to startup_icon (Eliminates white screen flash entirely)
-          values_dir = res_dir / "values"
+          # 4. Update styles.xml / themes.xml to set windowBackground to startup_icon (Eliminates white screen flash entirely)
+          values_dir = Path("android/app/src/main/res/values")
           for theme_file in ["styles.xml", "themes.xml"]:
               theme_path = values_dir / theme_file
               if theme_path.exists():
@@ -112,7 +91,7 @@ jobs:
                               theme_path.write_text(t_content)
                               print(f"Updated {theme_file} with windowBackground to prevent white flash")
 
-          # 6. Update MainActivity (Java or Kotlin) keeping your exact 5s delay, size 240, and UI logic
+          # 5. Update MainActivity (Java or Kotlin) with 5-second persistent startup icon overlay & existing logic
           java_files = list(
               Path("android/app/src/main/java").rglob("MainActivity.java")
           )
@@ -342,12 +321,12 @@ jobs:
                   ))
                   icon.scaleType = ImageView.ScaleType.FIT_CENTER
 
-                  val size = (180 * resources.displayMetrics.density).toInt()
+                  val size = (240 * resources.displayMetrics.density).toInt()
                   val iconParams = FrameLayout.LayoutParams(size, size)
                   iconParams.gravity = Gravity.CENTER
                   overlay.addView(icon, iconParams)
 
-                  root.addView(overlay)
+                  root.addView(overlay);
                   startupOverlay = overlay
               }
 
@@ -368,6 +347,35 @@ jobs:
 
           else:
               raise SystemExit("ERROR: MainActivity.java or MainActivity.kt was not found")
+          PY
+
+      - name: Generate app icons
+        run: npx capacitor-assets generate --android
+
+      - name: Fix Mipmap PNG icons for Notifications and Installers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+
+          source_icon = Path("resources/icon.png")
+          if source_icon.exists():
+              img = Image.open(source_icon).convert("RGBA")
+              mipmaps = {
+                  "mipmap-mdpi": 48,
+                  "mipmap-hdpi": 72,
+                  "mipmap-xhdpi": 96,
+                  "mipmap-xxhdpi": 144,
+                  "mipmap-xxxhdpi": 192
+              }
+              res_dir = Path("android/app/src/main/res")
+              for folder, size in mipmaps.items():
+                  target_folder = res_dir / folder
+                  target_folder.mkdir(parents=True, exist_ok=True)
+                  resized = img.resize((size, size), Image.Resampling.LANCZOS)
+                  resized.save(target_folder / "ic_launcher.png", "PNG")
+                  resized.save(target_folder / "ic_launcher_round.png", "PNG")
+              print("Injected standard PNG icons into mipmap folders over capacitor-assets output!")
           PY
 
       - name: Create Capacitor assets directory
