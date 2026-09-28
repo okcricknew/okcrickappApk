@@ -56,7 +56,8 @@ jobs:
                       '<application android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round"'
                   )
               if "com.google.firebase.messaging.default_notification_icon" not in manifest_content:
-                  meta_tag = '\n        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@mipmap/ic_launcher" />'
+                  meta_tag = '\n        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/startup_icon" />'
+                  
                   manifest_content = manifest_content.replace(
                       "</application>",
                       f"{meta_tag}\n    </application>"
