@@ -217,7 +217,7 @@ jobs:
                   ));
                   icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
 
-                  int size = (int) (260 * getResources().getDisplayMetrics().density);
+                  int size = (int) (240 * getResources().getDisplayMetrics().density);
                   FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(size, size);
                   iconParams.gravity = Gravity.CENTER;
                   overlay.addView(icon, iconParams);
@@ -341,7 +341,7 @@ jobs:
                   ))
                   icon.scaleType = ImageView.ScaleType.FIT_CENTER
 
-                  val size = (260 * resources.displayMetrics.density).toInt()
+                  val size = (240 * resources.displayMetrics.density).toInt()
                   val iconParams = FrameLayout.LayoutParams(size, size)
                   iconParams.gravity = Gravity.CENTER
                   overlay.addView(icon, iconParams)
