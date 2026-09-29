@@ -322,7 +322,7 @@ jobs:
                   ))
                   icon.scaleType = ImageView.ScaleType.FIT_CENTER
 
-                  val size = (240 * resources.displayMetrics.density).toInt()
+                  val size = (120 * resources.displayMetrics.density).toInt()
                   val iconParams = FrameLayout.LayoutParams(size, size)
                   iconParams.gravity = Gravity.CENTER
                   overlay.addView(icon, iconParams)
