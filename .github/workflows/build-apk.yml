@@ -11,393 +11,711 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # =========================================================
+      # 1. CHECKOUT
+      # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # =========================================================
+      # 2. NODE
+      # =========================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
+      # =========================================================
+      # 3. INSTALL JS DEPENDENCIES
+      # =========================================================
       - name: Install dependencies
         run: npm install
 
+      # =========================================================
+      # 4. CREATE ANDROID PLATFORM
+      # =========================================================
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Install Python Pillow for Icon Generation
+      # =========================================================
+      # 5. INSTALL PYTHON PILLOW
+      # =========================================================
+      - name: Install Python Pillow
         run: pip install Pillow
 
-      - name: Configure Android Manifest, Theme Background, and UI Features
+      # =========================================================
+      # 6. GENERATE CAPACITOR ANDROID ASSETS
+      # =========================================================
+      - name: Generate app icons
+        run: npx capacitor-assets generate --android
+
+      # =========================================================
+      # 7. CREATE CAPACITOR ASSETS DIRECTORY
+      # =========================================================
+      - name: Create Capacitor assets directory
+        run: mkdir -p android/app/src/main/assets
+
+      # =========================================================
+      # 8. SYNC CAPACITOR
+      #
+      # IMPORTANT:
+      # Capacitor sync is done BEFORE native Android customization.
+      # This prevents sync from overwriting our native changes.
+      # =========================================================
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # =========================================================
+      # 9. CONFIGURE ANDROID
+      # =========================================================
+      - name: Configure Android icons, splash and MainActivity
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+          import shutil
+          from PIL import Image
 
-          # 1. Add swiperefreshlayout dependency to build.gradle
-          build_gradle = Path("android/app/build.gradle")
-          if build_gradle.exists():
-              content = build_gradle.read_text()
-              if "swiperefreshlayout" not in content:
-                  if "dependencies {" in content:
-                      content = content.replace(
-                          "dependencies {",
-                          "dependencies {\n    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'"
-                      )
-                      build_gradle.write_text(content)
-                      print("Added swiperefreshlayout dependency to build.gradle")
+          # =====================================================
+          # BASIC PATHS
+          # =====================================================
 
-          # 2. Update AndroidManifest.xml for App Installation & Notification Icons
-          manifest_path = Path("android/app/src/main/AndroidManifest.xml")
-          if manifest_path.exists():
-              manifest_content = manifest_path.read_text()
-              if "android:icon" not in manifest_content:
-                  manifest_content = manifest_content.replace(
-                      "<application",
-                      '<application android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round"'
-                  )
-              if "com.google.firebase.messaging.default_notification_icon" not in manifest_content:
-                  meta_tag = '\n        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/startup_icon" />'
-                  
-                  manifest_content = manifest_content.replace(
-                      "</application>",
-                      f"{meta_tag}\n    </application>"
-                  )
-              manifest_path.write_text(manifest_content)
-              print("Updated AndroidManifest.xml with launcher and notification icons")
+          android_dir = Path("android")
+          app_dir = android_dir / "app"
+          res_dir = app_dir / "src/main/res"
 
-          # 3. Copy the repository icon to a guaranteed drawable resource for startup overlay & instant background.
-          drawable_dir = Path("android/app/src/main/res/drawable")
-          drawable_dir.mkdir(parents=True, exist_ok=True)
           source_icon = Path("resources/icon.png")
-          target_icon = drawable_dir / "startup_icon.png"
+
           if not source_icon.exists():
-              raise SystemExit("ERROR: resources/icon.png was not found")
-          target_icon.write_bytes(source_icon.read_bytes())
-          print(f"Copied startup icon: {source_icon} -> {target_icon}")
+              raise SystemExit(
+                  "ERROR: resources/icon.png was not found"
+              )
 
-          # 4. Update styles.xml / themes.xml to set windowBackground to startup_icon (Eliminates white screen flash entirely)
-          values_dir = Path("android/app/src/main/res/values")
-          for theme_file in ["styles.xml", "themes.xml"]:
-              theme_path = values_dir / theme_file
-              if theme_path.exists():
-                  t_content = theme_path.read_text()
-                  if "android:windowBackground" not in t_content:
-                      if "<style " in t_content:
-                          parts = t_content.split(">", 1)
-                          if len(parts) == 2 and "</style>" in t_content:
-                              t_content = t_content.replace(
-                                  "</style>",
-                                  '    <item name="android:windowBackground">@drawable/startup_icon</item>\n    </style>'
-                              )
-                              theme_path.write_text(t_content)
-                              print(f"Updated {theme_file} with windowBackground to prevent white flash")
+          # =====================================================
+          # 1. FIND ANDROID PACKAGE / NAMESPACE
+          # =====================================================
 
-          # 5. Update MainActivity (Java or Kotlin) with 5-second persistent startup icon overlay & existing logic
+          build_gradle = app_dir / "build.gradle"
+
+          if not build_gradle.exists():
+              raise SystemExit(
+                  "ERROR: android/app/build.gradle was not found"
+              )
+
+          build_content = build_gradle.read_text()
+
+          namespace_match = re.search(
+              r'namespace\s*[=]?\s*[\'"]([^\'"]+)[\'"]',
+              build_content
+          )
+
+          application_id_match = re.search(
+              r'applicationId\s+[\'"]([^\'"]+)[\'"]',
+              build_content
+          )
+
+          package_name = None
+
+          if namespace_match:
+              package_name = namespace_match.group(1)
+          elif application_id_match:
+              package_name = application_id_match.group(1)
+
+          if not package_name:
+              raise SystemExit(
+                  "ERROR: Could not determine Android package name"
+              )
+
+          print(f"Detected Android package: {package_name}")
+
+          # =====================================================
+          # 2. ADD SWIPE REFRESH DEPENDENCY
+          # =====================================================
+
+          if "androidx.swiperefreshlayout:swiperefreshlayout" not in build_content:
+              if "dependencies {" in build_content:
+                  build_content = build_content.replace(
+                      "dependencies {",
+                      """dependencies {
+              implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'""",
+                      1
+                  )
+
+                  build_gradle.write_text(build_content)
+
+                  print(
+                      "Added SwipeRefreshLayout dependency"
+                  )
+
+          # =====================================================
+          # 3. CREATE DRAWABLE DIRECTORY
+          # =====================================================
+
+          drawable_dir = res_dir / "drawable"
+          drawable_dir.mkdir(parents=True, exist_ok=True)
+
+          # =====================================================
+          # 4. CREATE STARTUP ICON
+          #
+          # This is the large full-color icon used by the startup
+          # screen / splash background.
+          # =====================================================
+
+          startup_icon = drawable_dir / "startup_icon.png"
+
+          shutil.copy2(
+              source_icon,
+              startup_icon
+          )
+
+          print(
+              f"Created startup icon: {startup_icon}"
+          )
+
+          # =====================================================
+          # 5. CREATE PROPER ANDROID NOTIFICATION ICON
+          #
+          # Notification small icons should use a transparent
+          # background and a white foreground.
+          # =====================================================
+
+          notification_icon = drawable_dir / "notification_icon.png"
+
+          img = Image.open(source_icon).convert("RGBA")
+
+          pixels = img.load()
+
+          for y in range(img.height):
+              for x in range(img.width):
+                  r, g, b, a = pixels[x, y]
+
+                  if a == 0:
+                      pixels[x, y] = (255, 255, 255, 0)
+                  else:
+                      pixels[x, y] = (255, 255, 255, a)
+
+          img.save(
+              notification_icon,
+              "PNG",
+              optimize=True
+          )
+
+          print(
+              f"Created notification icon: {notification_icon}"
+          )
+
+          # =====================================================
+          # 6. FIX LAUNCHER PNG ICONS
+          # =====================================================
+
+          launcher_sizes = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192
+          }
+
+          launcher_img = Image.open(
+              source_icon
+          ).convert("RGBA")
+
+          for folder, size in launcher_sizes.items():
+
+              target_folder = res_dir / folder
+
+              target_folder.mkdir(
+                  parents=True,
+                  exist_ok=True
+              )
+
+              resized = launcher_img.resize(
+                  (size, size),
+                  Image.Resampling.LANCZOS
+              )
+
+              resized.save(
+                  target_folder / "ic_launcher.png",
+                  "PNG",
+                  optimize=True
+              )
+
+              resized.save(
+                  target_folder / "ic_launcher_round.png",
+                  "PNG",
+                  optimize=True
+              )
+
+          print("Launcher PNG icons generated")
+
+          # =====================================================
+          # 7. UPDATE ANDROID MANIFEST
+          # =====================================================
+
+          manifest_path = (
+              app_dir /
+              "src/main/AndroidManifest.xml"
+          )
+
+          if not manifest_path.exists():
+              raise SystemExit(
+                  "ERROR: AndroidManifest.xml was not found"
+              )
+
+          manifest_content = manifest_path.read_text()
+
+          # Add launcher icons to application tag if missing.
+          application_match = re.search(
+              r"<application\b[^>]*>",
+              manifest_content
+          )
+
+          if not application_match:
+              raise SystemExit(
+                  "ERROR: <application> tag not found"
+              )
+
+          application_tag = application_match.group(0)
+
+          if "android:icon=" not in application_tag:
+              application_tag = application_tag.replace(
+                  "<application",
+                  '<application android:icon="@mipmap/ic_launcher"'
+              )
+
+          if "android:roundIcon=" not in application_tag:
+              application_tag = application_tag.replace(
+                  "<application",
+                  '<application android:roundIcon="@mipmap/ic_launcher_round"'
+              )
+
+          manifest_content = (
+              manifest_content[:application_match.start()]
+              + application_tag
+              + manifest_content[application_match.end():]
+          )
+
+          # Remove old notification icon metadata.
+          manifest_content = re.sub(
+              r'\s*<meta-data\s+android:name="com\.google\.firebase\.messaging\.default_notification_icon"[^>]*/>',
+              "",
+              manifest_content
+          )
+
+          # Add correct notification icon.
+          notification_meta = """
+              <meta-data
+                  android:name="com.google.firebase.messaging.default_notification_icon"
+                  android:resource="@drawable/notification_icon" />"""
+
+          manifest_content = manifest_content.replace(
+              "</application>",
+              notification_meta + "\n    </application>"
+          )
+
+          manifest_path.write_text(
+              manifest_content
+          )
+
+          print(
+              "AndroidManifest.xml updated"
+          )
+
+          # =====================================================
+          # 8. FIND MAIN ACTIVITY
+          # =====================================================
+
           java_files = list(
-              Path("android/app/src/main/java").rglob("MainActivity.java")
+              Path(
+                  "android/app/src/main/java"
+              ).rglob("MainActivity.java")
           )
 
           kt_files = list(
-              Path("android/app/src/main/java").rglob("MainActivity.kt")
+              Path(
+                  "android/app/src/main/java"
+              ).rglob("MainActivity.kt")
           )
 
+          # =====================================================
+          # 9. JAVA MAIN ACTIVITY
+          # =====================================================
+
           if java_files:
+
               java_file = java_files[0]
-              java_file.write_text("""package in.okcrick.app;
+
+              java_code = f"""package {package_name};
 
           import android.app.AlertDialog;
-          import android.graphics.Color;
           import android.os.Bundle;
           import android.os.Handler;
           import android.os.Looper;
-          import android.view.Gravity;
-          import android.view.View;
           import android.view.ViewGroup;
           import android.webkit.WebView;
-          import android.widget.FrameLayout;
-          import android.widget.ImageView;
+
           import androidx.activity.OnBackPressedCallback;
           import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
           import com.getcapacitor.BridgeActivity;
 
-          public class MainActivity extends BridgeActivity {
-
-              private View startupOverlay;
+          public class MainActivity extends BridgeActivity {{
 
               @Override
-              public void onCreate(Bundle savedInstanceState) {
+              public void onCreate(Bundle savedInstanceState) {{
                   super.onCreate(savedInstanceState);
-
-                  showStartupIcon();
-
-                  new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                      @Override
-                      public void run() {
-                          hideStartupIcon();
-                      }
-                  }, 5000);
 
                   getOnBackPressedDispatcher().addCallback(
                       this,
-                      new OnBackPressedCallback(true) {
+                      new OnBackPressedCallback(true) {{
                           @Override
-                          public void handleOnBackPressed() {
+                          public void handleOnBackPressed() {{
+
                               if (getBridge() != null &&
                                   getBridge().getWebView() != null &&
-                                  getBridge().getWebView().canGoBack()) {
-                                  getBridge().getWebView().goBack();
-                              } else {
+                                  getBridge().getWebView().canGoBack()) {{
+
+                                  getBridge()
+                                      .getWebView()
+                                      .goBack();
+
+                              }} else {{
+
                                   new AlertDialog.Builder(MainActivity.this)
                                       .setTitle("Exit App")
                                       .setMessage("Are you sure you want to exit?")
                                       .setNegativeButton("NO", null)
-                                      .setPositiveButton("YES", (dialog, which) -> finish())
+                                      .setPositiveButton(
+                                          "YES",
+                                          (dialog, which) -> finish()
+                                      )
                                       .show();
-                              }
-                          }
-                      }
+                              }}
+                          }}
+                      }}
                   );
 
                   WebView webView = getBridge().getWebView();
-                  if (webView != null) {
-                      ViewGroup parent = (ViewGroup) webView.getParent();
-                      if (parent != null) {
+
+                  if (webView != null) {{
+
+                      ViewGroup parent =
+                          (ViewGroup) webView.getParent();
+
+                      if (parent != null) {{
+
                           parent.removeView(webView);
 
-                          SwipeRefreshLayout swipeRefreshLayout = new SwipeRefreshLayout(this);
-                          swipeRefreshLayout.setLayoutParams(new ViewGroup.LayoutParams(
-                              ViewGroup.LayoutParams.MATCH_PARENT,
-                              ViewGroup.LayoutParams.MATCH_PARENT
-                          ));
+                          SwipeRefreshLayout swipeRefreshLayout =
+                              new SwipeRefreshLayout(this);
 
-                          swipeRefreshLayout.addView(webView, new ViewGroup.LayoutParams(
-                              ViewGroup.LayoutParams.MATCH_PARENT,
-                              ViewGroup.LayoutParams.MATCH_PARENT
-                          ));
-
-                          swipeRefreshLayout.setOnRefreshListener(() -> {
-                              webView.reload();
-                              new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                                  swipeRefreshLayout.setRefreshing(false);
-                              }, 1200);
-                          });
-
-                          parent.addView(swipeRefreshLayout);
-                      }
-                  }
-              }
-
-              private void showStartupIcon() {
-                  ViewGroup root = findViewById(android.R.id.content);
-                  if (root == null) return;
-
-                  FrameLayout overlay = new FrameLayout(this);
-                  overlay.setBackgroundColor(Color.WHITE);
-                  overlay.setLayoutParams(new FrameLayout.LayoutParams(
-                      ViewGroup.LayoutParams.MATCH_PARENT,
-                      ViewGroup.LayoutParams.MATCH_PARENT
-                  ));
-
-                  ImageView icon = new ImageView(this);
-                  icon.setImageResource(getResources().getIdentifier(
-                      "startup_icon", "drawable", getPackageName()
-                  ));
-                  icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-
-                  int size = (int) (240 * getResources().getDisplayMetrics().density);
-                  FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(size, size);
-                  iconParams.gravity = Gravity.CENTER;
-                  overlay.addView(icon, iconParams);
-
-                  root.addView(overlay);
-                  startupOverlay = overlay;
-              }
-
-              private void hideStartupIcon() {
-                  View overlay = startupOverlay;
-                  if (overlay == null) return;
-                  startupOverlay = null;
-                  overlay.animate()
-                      .alpha(0f)
-                      .setDuration(300)
-                      .withEndAction(() -> {
-                          ViewGroup parent = (ViewGroup) overlay.getParent();
-                          if (parent != null) parent.removeView(overlay);
-                      })
-                      .start();
-              }
-          }
-          """)
-              print(f"Updated Java MainActivity: {java_file}")
-
-          elif kt_files:
-              kt_file = kt_files[0]
-              kt_file.write_text("""package in.okcrick.app
-
-          import android.app.AlertDialog
-          import android.graphics.Color
-          import android.os.Bundle
-          import android.os.Handler
-          import android.os.Looper
-          import android.view.Gravity
-          import android.view.View
-          import android.view.ViewGroup
-          import android.widget.FrameLayout
-          import android.widget.ImageView
-          import androidx.activity.OnBackPressedCallback
-          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-          import com.getcapacitor.BridgeActivity
-
-          class MainActivity : BridgeActivity() {
-
-              private var startupOverlay: View? = null
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-
-                  showStartupIcon()
-
-                  Handler(Looper.getMainLooper()).postDelayed({
-                      hideStartupIcon()
-                  }, 5000)
-
-                  onBackPressedDispatcher.addCallback(
-                      this,
-                      object : OnBackPressedCallback(true) {
-                          override fun handleOnBackPressed() {
-                              val webView = bridge?.webView
-                              if (webView != null && webView.canGoBack()) {
-                                  webView.goBack()
-                              } else {
-                                  AlertDialog.Builder(this@MainActivity)
-                                      .setTitle("Exit App")
-                                      .setMessage("Are you sure you want to exit?")
-                                      .setNegativeButton("NO", null)
-                                      .setPositiveButton("YES") { _, _ -> finish() }
-                                      .show()
-                              }
-                          }
-                      }
-                  )
-
-                  val webView = bridge?.webView
-                  if (webView != null) {
-                      val parent = webView.parent as? ViewGroup
-                      parent?.let {
-                          it.removeView(webView)
-                          val swipeRefreshLayout = SwipeRefreshLayout(this).apply {
-                              layoutParams = ViewGroup.LayoutParams(
+                          swipeRefreshLayout.setLayoutParams(
+                              new ViewGroup.LayoutParams(
                                   ViewGroup.LayoutParams.MATCH_PARENT,
                                   ViewGroup.LayoutParams.MATCH_PARENT
                               )
-                              addView(webView, ViewGroup.LayoutParams(
+                          );
+
+                          swipeRefreshLayout.addView(
+                              webView,
+                              new ViewGroup.LayoutParams(
                                   ViewGroup.LayoutParams.MATCH_PARENT,
                                   ViewGroup.LayoutParams.MATCH_PARENT
-                              ))
-                              setOnRefreshListener {
-                                  webView.reload()
-                                  Handler(Looper.getMainLooper()).postDelayed({
-                                      isRefreshing = false
-                                  }, 1200)
-                              }
-                          }
-                          it.addView(swipeRefreshLayout)
-                      }
-                  }
-              }
+                              )
+                          );
 
-              private void showStartupIcon() {
-                  val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+                          swipeRefreshLayout.setOnRefreshListener(() -> {{
 
-                  val overlay = FrameLayout(this)
-                  overlay.setBackgroundColor(Color.WHITE)
-                  overlay.layoutParams = FrameLayout.LayoutParams(
-                      ViewGroup.LayoutParams.MATCH_PARENT,
-                      ViewGroup.LayoutParams.MATCH_PARENT
+                              webView.reload();
+
+                              new Handler(
+                                  Looper.getMainLooper()
+                              ).postDelayed(() -> {{
+
+                                  swipeRefreshLayout.setRefreshing(false);
+
+                              }}, 1200);
+                          }});
+
+                          parent.addView(
+                              swipeRefreshLayout
+                          );
+                      }}
+                  }}
+              }}
+          }}
+          """
+
+              java_file.write_text(
+                  java_code
+              )
+
+              print(
+                  f"Updated Java MainActivity: {java_file}"
+              )
+
+          # =====================================================
+          # 10. KOTLIN MAIN ACTIVITY
+          # =====================================================
+
+          elif kt_files:
+
+              kt_file = kt_files[0]
+
+              kotlin_code = f"""package {package_name}
+
+          import android.app.AlertDialog
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.view.ViewGroup
+          import android.webkit.WebView
+
+          import androidx.activity.OnBackPressedCallback
+          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+
+          import com.getcapacitor.BridgeActivity
+
+          class MainActivity : BridgeActivity() {{
+
+              override fun onCreate(
+                  savedInstanceState: Bundle?
+              ) {{
+
+                  super.onCreate(savedInstanceState)
+
+                  onBackPressedDispatcher.addCallback(
+                      this,
+                      object : OnBackPressedCallback(true) {{
+
+                          override fun handleOnBackPressed() {{
+
+                              val webView =
+                                  bridge?.webView
+
+                              if (
+                                  webView != null &&
+                                  webView.canGoBack()
+                              ) {{
+
+                                  webView.goBack()
+
+                              }} else {{
+
+                                  AlertDialog.Builder(
+                                      this@MainActivity
+                                  )
+                                      .setTitle("Exit App")
+                                      .setMessage(
+                                          "Are you sure you want to exit?"
+                                      )
+                                      .setNegativeButton(
+                                          "NO",
+                                          null
+                                      )
+                                      .setPositiveButton(
+                                          "YES"
+                                      ) {{ _, _ ->
+                                          finish()
+                                      }}
+                                      .show()
+                              }}
+                          }}
+                      }}
                   )
 
-                  val icon = ImageView(this)
-                  icon.setImageResource(resources.getIdentifier(
-                      "startup_icon", "drawable", packageName
-                  ))
-                  icon.scaleType = ImageView.ScaleType.FIT_CENTER
+                  val webView =
+                      bridge?.webView
 
-                  val size = (120 * resources.displayMetrics.density).toInt()
-                  val iconParams = FrameLayout.LayoutParams(size, size)
-                  iconParams.gravity = Gravity.CENTER
-                  overlay.addView(icon, iconParams)
+                  if (webView != null) {{
 
-                  root.addView(overlay);
-                  startupOverlay = overlay
-              }
+                      val parent =
+                          webView.parent as? ViewGroup
 
-              private void hideStartupIcon() {
-                  val overlay = startupOverlay ?: return
-                  startupOverlay = null
-                  overlay.animate()
-                      .alpha(0f)
-                      .setDuration(300)
-                      .withEndAction {
-                          (overlay.parent as? ViewGroup)?.removeView(overlay)
-                      }
-                      .start()
-              }
-          }
-          """)
-              print(f"Updated Kotlin MainActivity: {kt_file}")
+                      parent?.let {{ container ->
+
+                          container.removeView(
+                              webView
+                          )
+
+                          val swipeRefreshLayout =
+                              SwipeRefreshLayout(this)
+
+                          swipeRefreshLayout.layoutParams =
+                              ViewGroup.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT
+                              )
+
+                          swipeRefreshLayout.addView(
+                              webView,
+                              ViewGroup.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT
+                              )
+                          )
+
+                          swipeRefreshLayout.setOnRefreshListener {{
+
+                              webView.reload()
+
+                              Handler(
+                                  Looper.getMainLooper()
+                              ).postDelayed({{
+
+                                  swipeRefreshLayout.isRefreshing =
+                                      false
+
+                              }}, 1200)
+                          }}
+
+                          container.addView(
+                              swipeRefreshLayout
+                          )
+                      }}
+                  }}
+              }}
+          }}
+          """
+
+              kt_file.write_text(
+                  kotlin_code
+              )
+
+              print(
+                  f"Updated Kotlin MainActivity: {kt_file}"
+              )
 
           else:
-              raise SystemExit("ERROR: MainActivity.java or MainActivity.kt was not found")
+
+              raise SystemExit(
+                  "ERROR: MainActivity.java or MainActivity.kt was not found"
+              )
+
+          # =====================================================
+          # 11. CREATE SPLASH BACKGROUND
+          #
+          # This gives Android a drawable background immediately
+          # instead of a plain white startup screen.
+          # =====================================================
+
+          splash_background = drawable_dir / "splash_background.xml"
+
+          splash_background.write_text(
+              """<?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <item android:drawable="@android:color/white" />
+
+              <item
+                  android:width="240dp"
+                  android:height="240dp"
+                  android:gravity="center"
+                  android:drawable="@drawable/startup_icon" />
+
+          </layer-list>
+          """
+          )
+
+          print(
+              f"Created splash background: {splash_background}"
+          )
+
+          # =====================================================
+          # 12. UPDATE EXISTING THEME FILES
+          #
+          # Do NOT blindly append duplicate windowBackground items.
+          # Replace existing one if present.
+          # =====================================================
+
+          values_dirs = [
+              res_dir / "values",
+              res_dir / "values-v31"
+          ]
+
+          for values_dir in values_dirs:
+
+              if not values_dir.exists():
+                  continue
+
+              for theme_path in values_dir.glob("*.xml"):
+
+                  try:
+                      content = theme_path.read_text()
+                  except Exception:
+                      continue
+
+                  if "<style" not in content:
+                      continue
+
+                  # Remove previously injected window background.
+                  content = re.sub(
+                      r'\s*<item\s+name="android:windowBackground"[^>]*>\s*</item>',
+                      "",
+                      content
+                  )
+
+                  # Add only if there is a style.
+                  if "android:windowBackground" not in content:
+
+                      content = content.replace(
+                          "</style>",
+                          """
+              <item name="android:windowBackground">
+                  @drawable/splash_background
+              </item>
+          </style>""",
+                          1
+                      )
+
+                  theme_path.write_text(
+                      content
+                  )
+
+                  print(
+                      f"Updated theme background: {theme_path}"
+                  )
+
+          print("")
+          print("==========================================")
+          print("Android configuration completed")
+          print("Package:", package_name)
+          print("Launcher icon: ic_launcher")
+          print("Round icon: ic_launcher_round")
+          print("Startup icon: startup_icon")
+          print("Notification icon: notification_icon")
+          print("==========================================")
+
           PY
 
-      - name: Generate app icons
-        run: npx capacitor-assets generate --android
-
-      - name: Fix Mipmap PNG icons for Notifications and Installers
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          from PIL import Image
-
-          source_icon = Path("resources/icon.png")
-          if source_icon.exists():
-              img = Image.open(source_icon).convert("RGBA")
-              mipmaps = {
-                  "mipmap-mdpi": 48,
-                  "mipmap-hdpi": 72,
-                  "mipmap-xhdpi": 96,
-                  "mipmap-xxhdpi": 144,
-                  "mipmap-xxxhdpi": 192
-              }
-              res_dir = Path("android/app/src/main/res")
-              for folder, size in mipmaps.items():
-                  target_folder = res_dir / folder
-                  target_folder.mkdir(parents=True, exist_ok=True)
-                  resized = img.resize((size, size), Image.Resampling.LANCZOS)
-                  resized.save(target_folder / "ic_launcher.png", "PNG")
-                  resized.save(target_folder / "ic_launcher_round.png", "PNG")
-              print("Injected standard PNG icons into mipmap folders over capacitor-assets output!")
-          PY
-
-      - name: Create Capacitor assets directory
-        run: mkdir -p android/app/src/main/assets
-
-      - name: Sync Capacitor
-        run: npx cap sync android
-
+      # =========================================================
+      # 10. JAVA
+      # =========================================================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
+          cache: gradle
 
+      # =========================================================
+      # 11. BUILD APK
+      # =========================================================
       - name: Build APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
 
+      # =========================================================
+      # 12. RENAME APK
+      # =========================================================
       - name: Rename APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk OK-CRICK.apk
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk OK-CRICK.apk
 
+      # =========================================================
+      # 13. CREATE GITHUB RELEASE
+      # =========================================================
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -405,4 +723,3 @@ jobs:
           name: OK CRICK APK ${{ github.run_number }}
           files: OK-CRICK.apk
           generate_release_notes: false
-          
