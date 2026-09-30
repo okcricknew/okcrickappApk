@@ -75,22 +75,25 @@ jobs:
           target_icon.write_bytes(source_icon.read_bytes())
           print(f"Copied startup icon: {source_icon} -> {target_icon}")
 
-          # 4. Update styles.xml / themes.xml to set windowBackground to startup_icon (Eliminates white screen flash entirely)
-          values_dir = Path("android/app/src/main/res/values")
-          for theme_file in ["styles.xml", "themes.xml"]:
-              theme_path = values_dir / theme_file
-              if theme_path.exists():
-                  t_content = theme_path.read_text()
-                  if "android:windowBackground" not in t_content:
-                      if "<style " in t_content:
-                          parts = t_content.split(">", 1)
-                          if len(parts) == 2 and "</style>" in t_content:
-                              t_content = t_content.replace(
-                                  "</style>",
-                                  '    <item name="android:windowBackground">@drawable/startup_icon</item>\n    </style>'
-                              )
-                              theme_path.write_text(t_content)
-                              print(f"Updated {theme_file} with windowBackground to prevent white flash")
+          # 4. Do NOT use startup_icon as windowBackground.
+# The startup icon will be shown only by MainActivity's overlay.
+# This prevents the initial full-screen icon from appearing before the overlay.
+values_dir = Path("android/app/src/main/res/values")
+
+for theme_file in ["styles.xml", "themes.xml"]:
+    theme_path = values_dir / theme_file
+
+    if theme_path.exists():
+        t_content = theme_path.read_text()
+
+        # Remove any previously added startup_icon windowBackground.
+        t_content = t_content.replace(
+            '<item name="android:windowBackground">@drawable/startup_icon</item>',
+            ''
+        )
+
+        theme_path.write_text(t_content)
+        print(f"Removed startup_icon windowBackground from {theme_file}")
 
           # 5. Update MainActivity (Java or Kotlin) with 5-second persistent startup icon overlay & existing logic
           java_files = list(
